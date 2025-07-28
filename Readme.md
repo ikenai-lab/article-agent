@@ -1,3 +1,6 @@
+> [!CAUTION]
+> The current code is underdevelopment and may not work on all systems. Work is being done to improve this.
+
 ## Setup & Installation
 
 Before you start, you'll need to set up your environment.
