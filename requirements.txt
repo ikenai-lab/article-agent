@@ -1,0 +1,19 @@
+# Core utilities
+requests
+python-dotenv
+# Data Ingestion Agents
+ddgs
+yt-dlp
+trafilatura
+librosa
+# RAG & Vector Store
+sentence-transformers
+faiss-cpu
+langchain-text-splitters
+# LLM & Model Handling
+ollama
+librosa
+transformers
+# Note: 'accelerate' is often a required peer dependency for transformers
+accelerate
+lxml_html_clean

@@ -1,0 +1,45 @@
+The Attempt at Black Friday Data-Set
+
+Forbes declared data scientist as the hottest job of the year. That news was last heard an year ago and at that point I wanted to become a Data Scientist. Well that’s the kinda story you all would like to hear but unfortunately I’m not that kind of guy who does it for the money or even one who loves data. I'm just a normal kid whose intrigued by the notion of machine learning and data science. So I’m here to document as well as learn on the way to learn the art of data science.
+
+As we all know spending an hour on the internet can get you the knowledge to not only teach yourself where to learn but also make a blog about it. Now the order in 
+which i learnt is as follows:
+
+    Mathematics
+    Probabilities
+    Statistics
+    Machine Learning
+    Python(of course)
+
+After learning all these prerequisites I wanted to dive straight into a dataset. This is where my google search led me to a website which had a curated list of all the datasets. The link to the site is here.From there I first wanted to test my regression skills so i went for the Black Friday dataset.
+Data Preprocessing
+
+The dataset consists of 550,069 rows and 12 columns. The columns consist of the following:
+
+    User_ID (A continuous numerical value)
+    Product_ID(A alpha numeric value)
+    Gender (Binary -M/F)
+    Age (in bins of 5 types: 0–17, 18–25,26–35,36–45,46–50,51–55,55+)
+    Occupation
+    City_category (in 3 types: A,B,C)
+    Stay_In_Current_City_Years(in 4 categories: 1,2,3,4+)
+    Marital Status (Binary value)
+    Product_Category_1 (Numerical Value)
+    Product_Category_2 (May or May not have a value)
+    Product_Category_3 (May or May not have a value)
+    Purchase (Numerical Value, also the target variable)
+
+
+As we can see this dataset requires a regressive approach as the output variable is continuous in nature. First of all I would check if there are any missing or NaN values present in that dataset.This can be done with simple line of code dataframe.isnull().sum()
+dataframe.isnull().sum() Output
+
+To fill these missing values we first analyze what category has the missing values. The categories(attributes) are : Product_Category_2 and Product_Category_3. These attributes do not require the replacement with mean for obvious reasons but they can be replaced with a zero or a lower value so as to make sure its contribution is very low in the model training. Here I give it a value of zero with the help of dataframe.fillna(0)
+
+But before going into the data analysis part of this project we must first make all the categorical values into numeric one.But why should we? The libraries which we use to generate our models require numerical values to compute the values.To do that we have 2 simple functions which help them to encode them into binary or numerical data values,namely :
+
+    LabelEncoder: A simple package from sklearn.preprocessing which converts the categorical data into a numerical data and gives them the value which starts from 0 all the way up to the number of categories which the data values has been divided into. Example: A column of data has the values of male and female. When label encoder is applied to this column the data values get converted into Female - 0 and Male-1. Similarly as we got for more number of categories the data gets higher numerical values.
+    OneHotEncoder: OneHotEncoder converts the categorical data into binary data. Example : assume a dataset has 4 categories Red, Green, Blue and Black. What OneHotEncoder does is gives each of the value a binary value and converts the column into 4 different columns: is_Red, is_Green, is_Blue and is_Black. For each row only one of the column will have the value 1 and rest of them will be zeros.
+
+I’ll be using LabelEncoder as there are too many categories in this dataset and many columns require encoding. If I were to use OneHotEncoder it would convert categories into many columns and this would increase the complexity of the dataset for the model.
+
+The model analysis and the scoring and revaluation of the models will be covered in the future parts .
