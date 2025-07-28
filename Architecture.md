@@ -30,6 +30,44 @@ This tool isn't just a simple script. It's an entire pipeline of specialized AI 
 
 ## How It Works: The Agentic Pipeline
 
+```mermaid
+flowchart TD
+ subgraph subGraph0["1. Planning &amp; Data Collection"]
+        A["CLI Command: python main.py"]
+        B("main.py Orchestrator")
+        C{"PlannerAgent"}
+        D["Tools: Web, YouTube, ArXiv"]
+  end
+ subgraph subGraph1["2. Knowledge Base Creation"]
+        E(("Raw Research Data"))
+        F("RAG Builder")
+        G[("FAISS Vector Store")]
+  end
+ subgraph subGraph2["3. Outline, Approval & Writing Loop"]
+        H{"WriterAgent"}
+        I{"Human-in-the-Loop"}
+        J{"CritiqueAgent"}
+  end
+ subgraph subGraph3["4. Final Output"]
+        K["Article .md / .html"]
+  end
+    A --> B
+    B --> C
+    C -- Generates Research Plan --> B
+    B -- Executes Plan --> D
+    D --> E
+    E --> F
+    F --> G
+    B -- Initiates Writing --> H
+    H -- Uses --> G
+    H -- Creates Article Outline --> I
+    I -- Approves Outline --> H
+    H -- Writes Section --> J
+    J -- Provides Feedback --> H
+    H -- Final Draft --> K
+```
+
+
 The process works like an assembly line of specialized agents. Here’s how they collaborate:
 
 - The Planner (planner.py): You give it a topic. The PlannerAgent thinks about the best way to research it. It creates a ResearchPlan that outlines which tools to use and what questions to ask. For example, for a tech topic, it might decide to use search_tech_blogs and search_arxiv.
