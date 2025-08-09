@@ -5,6 +5,7 @@ import yt_dlp
 import traceback
 import torch
 from transformers import pipeline
+from transformers import WhisperForConditionalGeneration, AutoProcessor
 import librosa # Although imported, librosa isn't explicitly used for audio loading here. pipeline handles it.
 import arxiv
 from datetime import datetime # Import datetime module
@@ -12,6 +13,7 @@ import re # Import regex for URL validation
 
 # --- Module-level caches for models/pipelines ---
 _transcriber_pipeline = None 
+_whisper_components = None 
 
 # --- Tool Definition ---
 
@@ -72,7 +74,9 @@ def search_tech_blogs(query: str, num_results: int = 3) -> str:
     tech_sites = [
         "techcrunch.com", "theverge.com", "wired.com", 
         "arstechnica.com", "venturebeat.com", "hackernoon.com", 
-        "engadget.com", "zdnet.com", "cnet.com" # Added more sites
+        "engadget.com", "zdnet.com", "cnet.com",
+        # --- Added more sources ---
+        "gizmodo.com", "mashable.com", "digitaltrends.com"
     ]
     # Corrected site query syntax for DDGS (using site: operator per site)
     site_query_parts = [f"site:{site}" for site in tech_sites]
@@ -87,7 +91,9 @@ def search_news(query: str, num_results: int = 3) -> str:
     print(f"  -> Tool: search_news | Query: '{query}'")
     news_sites = [
         "reuters.com", "apnews.com", "bbc.com/news", 
-        "nytimes.com", "theguardian.com", "cnn.com", "washingtonpost.com"
+        "nytimes.com", "theguardian.com", "cnn.com", "washingtonpost.com",
+        # --- Added more sources ---
+        "npr.org", "aljazeera.com", "wsj.com"
     ]
     site_query_parts = [f"site:{site}" for site in news_sites]
     full_query = f"{query} ({' OR '.join(site_query_parts)})"
@@ -100,7 +106,9 @@ def search_finance_news(query: str, num_results: int = 3) -> str:
     print(f"  -> Tool: search_finance_news | Query: '{query}'")
     finance_sites = [
         "bloomberg.com", "wsj.com", "ft.com", 
-        "cnbc.com", "marketwatch.com", "investopedia.com"
+        "cnbc.com", "marketwatch.com", "investopedia.com",
+        # --- Added more sources ---
+        "reuters.com/business", "seekingalpha.com", "fool.com"
     ]
     site_query_parts = [f"site:{site}" for site in finance_sites]
     full_query = f"{query} ({' OR '.join(site_query_parts)})"
@@ -109,82 +117,97 @@ def search_finance_news(query: str, num_results: int = 3) -> str:
 def search_youtube_transcripts(query: str, num_videos: int = 1) -> str:
     """
     Searches YouTube for a video on a topic and returns its transcript.
+    Uses the model's `generate` method for robust long-form transcription.
     """
-    global _transcriber_pipeline # Declare intent to use/modify the global cache variable
+    global _whisper_components # Declare intent to use/modify the global cache variable
 
-    print(f"  -> Tool: search_youtube_transcripts | Query: '{query}'")
+    print(f" -> Tool: search_youtube_transcripts | Query: '{query}'")
     
     video_url = None
-    # FIX: Removed the incorrect 'site:youtube.com'
-    # DDGS search should naturally return youtube.com links.
-    Youtube_query = f"{query} youtube" 
-    
+    audio_filename = 'temp_audio'
+    audio_path = f'{audio_filename}.mp3'
+
     try:
+        # Step 1: Find and download the YouTube video audio (no changes here)
+        youtube_query = f"{query} site:youtube.com"
+        print(f"   - Refined search query: '{youtube_query}'")
+
         with DDGS() as ddgs:
-            # Use 'videos' search type for more relevant results
-            results = list(ddgs.videos(query=Youtube_query, max_results=num_videos))
+            results = list(ddgs.videos(query=youtube_query, max_results=num_videos, timelimit='m'))
             if not results:
-                print("    - No YouTube videos found.")
+                print("   - No YouTube videos found.")
                 return "No YouTube videos found for this topic."
             
-            # Select the first video URL
-            video_url = results[0]['content'] # 'content' key typically holds the URL for video results
-            
-            # Basic validation to ensure it's a YouTube URL
+            video_url = results[0]['content']
             if not video_url or not re.search(r"youtube\.com|youtu\.be", video_url):
-                print(f"    - Found URL is not a valid YouTube link: {video_url}. Skipping download.")
-                return f"Invalid YouTube URL found for query: {query}"
+                print(f"   - Search returned a non-YouTube link despite filtering: {video_url}. Skipping.")
+                return f"Failed to find a valid YouTube URL for query: {query}"
                 
-            print(f"    - Found video: '{results[0].get('title', 'Untitled')}' at {video_url}")
+            print(f"   - Found video: '{results[0].get('title', 'Untitled')}' at {video_url}")
 
-        # Lazy load transcriber pipeline once
-        if _transcriber_pipeline is None:
-            device = "cuda:0" if torch.cuda.is_available() else "cpu"
-            torch_dtype = torch.float16 if torch.cuda.is_available() and torch.cuda.get_device_properties(0).total_memory > 8 * 1024**3 else torch.float32 # Check for sufficient VRAM
-            model_id = "distil-whisper/distil-large-v2"
-            print(f"    - Loading transcription model: '{model_id}' on {device}...")
-            _transcriber_pipeline = pipeline("automatic-speech-recognition", model=model_id, torch_dtype=torch_dtype, device=device)
-            print("    ✅ Transcription model loaded.")
-
-        # Download the audio from the video
-        audio_path = 'temp_audio.mp3' # Use a consistent filename
         ydl_opts = {
             'format': 'bestaudio/best',
             'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': '192'}],
-            'outtmpl': 'temp_audio', # This means the file will be temp_audio.mp3
-            'quiet': True,
-            'no_warnings': True,
-            'restrictfilenames': True, # Keep filenames simple
+            'outtmpl': audio_filename, 'quiet': True, 'no_warnings': True, 'restrictfilenames': True,
         }
-
-        print("    - Downloading audio...")
+        print("   - Downloading audio...")
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            # yt_dlp.download returns 0 on success, non-zero on failure
-            download_result = ydl.download([video_url])
-            if download_result != 0:
-                raise Exception("yt-dlp download failed with non-zero exit code.")
-        print("    - Audio downloaded.")
+            ydl.download([video_url])
+        print("   - Audio downloaded.")
 
-        # Transcribe the audio
-        print("    - Transcribing audio...")
-        # pipeline expects audio path or array. If audio_path is 'temp_audio.mp3', pass that.
-        result = _transcriber_pipeline(audio_path, return_timestamps=False) # return_timestamps=False to get just text
-        transcript_text = result["text"].strip()
-        print("    - Transcription complete.")
+        # Step 2: 💡 REFACTORED MODEL LOADING
+        # Lazy load the model and processor directly instead of the pipeline
+        if _whisper_components is None:
+            device = "cuda:0" if torch.cuda.is_available() else "cpu"
+            torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+            model_id = "distil-whisper/distil-large-v2"
+            
+            print(f"   - Loading model and processor: '{model_id}' on {device}...")
+            processor = AutoProcessor.from_pretrained(model_id)
+            model = WhisperForConditionalGeneration.from_pretrained(model_id, torch_dtype=torch_dtype, low_cpu_mem_usage=True, use_safetensors=True)
+            model.to(device)
+            _whisper_components = {"processor": processor, "model": model, "device": device}
+            print("   ✅ Model and processor loaded.")
+
+        # Step 3: 💡 REFACTORED TRANSCRIPTION PROCESS
+        # Use the model's native .generate() method for long-form transcription
+        print("   - Transcribing audio using model.generate()...")
+        
+        # Get components from cache
+        processor = _whisper_components["processor"]
+        model = _whisper_components["model"]
+        device = _whisper_components["device"]
+
+        # Load audio file and resample to the required 16kHz
+        audio_array, sampling_rate = librosa.load(audio_path, sr=16000)
+
+        # Process the audio array to create input features
+        input_features = processor(audio_array, sampling_rate=sampling_rate, return_tensors="pt").input_features
+        
+        # Move features to the correct device (GPU/CPU)
+        input_features = input_features.to(device, dtype=torch_dtype if device == "cuda:0" else torch.float32)
+
+        # Generate token IDs using the model's internal chunking
+        predicted_ids = model.generate(input_features)
+
+        # Decode the token IDs to text
+        transcript_text = processor.batch_decode(predicted_ids, skip_special_tokens=True)[0].strip()
+
+        print("   - Transcription complete.")
         return transcript_text
         
     except Exception as e:
-        print(f"    - Failed during YouTube video processing: {e}")
+        print(f"   - Failed during YouTube video processing: {e}")
         traceback.print_exc()
         return f"Failed to get YouTube transcript for '{query}': {e}"
     finally:
-        # Clean up the downloaded audio file
+        # Step 4: Clean up the audio file (no changes here)
         if os.path.exists(audio_path):
             try:
                 os.remove(audio_path)
-                print("    - Cleaned up temporary audio file.")
+                print("   - Cleaned up temporary audio file.")
             except Exception as e:
-                print(f"    - Error cleaning up temp audio file: {e}")
+                print(f"   - Error cleaning up temp audio file: {e}")
 
 
 def search_arxiv(query: str, num_results: int = 2) -> str:
@@ -219,7 +242,6 @@ def get_current_time() -> str:
     Returns the current date and time in IST.
     """
     print("  -> Tool: get_current_time")
-    # Current time is Monday, July 28, 2025 at 8:16:07 PM IST.
     # The datetime.now() function gives local time. No specific timezone conversion needed if local time is IST.
     now = datetime.now()
     return now.strftime("%Y-%m-%d %H:%M:%S IST") # Explicitly add IST
@@ -257,12 +279,12 @@ if __name__ == '__main__':
     print("\n[RESULTS (Finance News)]")
     print(finance_results[:500] + "...")
 
-    # Test search_youtube_transcripts
-    print("\n\n--- Testing Functional Tool: search_youtube_transcripts ---")
-    # Use a well-known, public video for testing if possible, or a general topic
-    transcript_results = search_youtube_transcripts("Generative AI explained")
-    print("\n[RESULTS (YouTube Transcript)]")
-    print(transcript_results[:500] + "...")
+    # # Test search_youtube_transcripts
+    # print("\n\n--- Testing Functional Tool: search_youtube_transcripts ---")
+    # # Use a well-known, public video for testing if possible, or a general topic
+    # transcript_results = search_youtube_transcripts("Generative AI 2025")
+    # print("\n[RESULTS (YouTube Transcript)]")
+    # print(transcript_results[:500] + "...")
 
     # Test search_arxiv
     print("\n\n--- Testing Functional Tool: search_arxiv ---")
@@ -274,4 +296,3 @@ if __name__ == '__main__':
     print("\n\n--- Testing New Tool: get_current_time ---")
     current_time = get_current_time()
     print(f"\n[RESULTS]\nCurrent Time: {current_time}")
-
