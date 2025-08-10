@@ -269,7 +269,7 @@ if __name__ == '__main__':
 
     # Test search_tech_blogs
     print("\n--- Testing Specialized Tool: search_tech_blogs ---")
-    tech_results = search_tech_blogs("Qwen3 release")
+    tech_results = search_tech_blogs("granite3.3-ctx release")
     print("\n[RESULTS (Tech Blogs)]")
     print(tech_results[:500] + "...")
 

@@ -59,7 +59,10 @@ def run_pipeline(topic: str, style_file: str, target_word_count: int,
     """
     Runs the full agentic pipeline from planning to article generation.
     """
-    print("🚀🚀🚀 Starting Agentic Article Generation Pipeline 🚀🚀�")
+    print("🚀🚀🚀 Starting Agentic Article Generation Pipeline 🚀🚀")
+    total_prompt_tokens = 0
+    total_eval_tokens = 0
+    total_tokens = 0
     
     DATA_DIR = 'data'
     COMBINED_CONTEXT_FILE = os.path.join(DATA_DIR, 'combined_context.txt')
@@ -76,13 +79,16 @@ def run_pipeline(topic: str, style_file: str, target_word_count: int,
             print(f"✅ Found cached context at '{COMBINED_CONTEXT_FILE}' and vector store. Skipping research. Use --force-refresh to override.")
             planner = PlannerAgent()
             # A dummy plan is still needed to get the suggested_outline for the writer
-            research_plan = planner.generate_plan(topic, list(AVAILABLE_TOOLS.keys()))
+            research_plan, planner_tokens = planner.generate_plan(topic, list(AVAILABLE_TOOLS.keys()))
             if not research_plan:
                 research_plan = ResearchPlan(topic=topic, reasoning="Skipped research, using dummy plan.", complexity="simple", estimated_time="N/A", steps=[], success_criteria=[], fallback_strategies=[], suggested_outline=[f"Introduction to {topic}", "Main Points", "Conclusion"])
         else:
             planner = PlannerAgent()
             tool_names = list(AVAILABLE_TOOLS.keys())
-            research_plan: Optional[ResearchPlan] = planner.generate_plan(topic, tool_names)
+            research_plan, planner_tokens = planner.generate_plan(topic, tool_names)
+            total_prompt_tokens += planner_tokens.get('prompt_tokens', 0)
+            total_eval_tokens += planner_tokens.get('eval_tokens', 0)
+            total_tokens += planner_tokens.get('total_tokens', 0)
 
             if not research_plan or not research_plan.steps:
                 print("❌ Could not generate a valid research plan. Aborting.")
@@ -123,7 +129,11 @@ def run_pipeline(topic: str, style_file: str, target_word_count: int,
                 style_sample_text = f.read()
             
             style_analyzer = StyleAnalyzerAgent() # Pass your ollama instance here
-            style_profile = style_analyzer.analyze_style(style_sample_text)
+            style_profile, style_tokens = style_analyzer.analyze_style(style_sample_text)
+
+            total_prompt_tokens += style_tokens.get('prompt_tokens', 0)
+            total_eval_tokens += style_tokens.get('eval_tokens', 0)
+            total_tokens += style_tokens.get('total_tokens', 0)
 
             if not style_profile:
                 print("❌ Could not generate a style profile. Aborting.")
@@ -168,7 +178,11 @@ def run_pipeline(topic: str, style_file: str, target_word_count: int,
         
         # --- CHANGE 3: Updated the call to the writer agent ---
         # Pass the generated 'style_profile' dictionary instead of the 'style_file' path.
-        final_article_content, metadata = writer_agent.write_article_from_enhanced_plan(article_plan, style_profile)
+        final_article_content, metadata, writer_tokens = writer_agent.write_article_from_enhanced_plan(article_plan, style_profile)
+
+        total_prompt_tokens += writer_tokens.get('prompt_tokens', 0)
+        total_eval_tokens += writer_tokens.get('eval_tokens', 0)
+        total_tokens += writer_tokens.get('total_tokens', 0)
 
         if final_article_content:
             output_dir = "outputs"
@@ -188,6 +202,11 @@ def run_pipeline(topic: str, style_file: str, target_word_count: int,
             print(f"✅ Article also saved as HTML to: '{html_filename}'")
 
             writer_agent.print_article_metrics(metadata)
+            print("\n--- 📊 Total Token Usage ---")
+            print(f"  Total Prompt Tokens: {total_prompt_tokens}")
+            print(f"  Total Evaluation Tokens: {total_eval_tokens}")
+            print(f"  Grand Total Tokens: {total_tokens}")
+            print("--------------------------")
         else:
             print("\n❌❌❌ Pipeline Failed: Article generation did not produce any output. ❌❌❌")
 

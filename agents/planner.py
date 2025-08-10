@@ -4,9 +4,10 @@ import json
 import re
 import traceback
 import sys
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Union,Tuple 
 from dataclasses import dataclass, field
 from enum import Enum
+from agents.ollama_token_counter import chat_with_token_counts # ADD
 
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if project_root not in sys.path:
@@ -22,17 +23,15 @@ class PlanComplexity(Enum):
 
 @dataclass
 class PlanStep:
-    """Represents a single step in the research plan."""
-    step_id: int # Added step_id as per LLM output expectation and dependencies
+    step_id: int
     tool: str
     query: str
-    priority: int = 1  # 1 = high, 2 = medium, 3 = low
-    depends_on: List[int] = field(default_factory=list) # Use default_factory for mutable defaults
-    expected_output: str = ""  # What we expect to get from this step
+    priority: int = 1
+    depends_on: List[int] = field(default_factory=list)
+    expected_output: str = ""
 
 @dataclass
 class ResearchPlan:
-    """Represents a complete research plan."""
     topic: str
     reasoning: str
     complexity: PlanComplexity
@@ -40,79 +39,54 @@ class ResearchPlan:
     steps: List[PlanStep]
     success_criteria: List[str]
     fallback_strategies: List[str]
-    suggested_outline: List[str] = field(default_factory=list) # NEW: Suggested high-level outline
+    suggested_outline: List[str] = field(default_factory=list)
 
 class PlannerAgent:
-    """
-    An enhanced agent that analyzes a topic and creates a comprehensive research plan 
-    by selecting the most appropriate tools and generating targeted queries with dependencies.
-    It also suggests a high-level article outline.
-    """
-    
-    def __init__(self, model_name="gemma3"):
+    def __init__(self, model_name="granite3.3-ctx"):
         print("🤖 Initializing Enhanced Planner Agent...")
         self.model_name = model_name
         self.max_retries = 3
-        # Dynamically get tool descriptions from the imported AVAILABLE_TOOLS
         self.tool_descriptions = self._get_tool_descriptions()
-        
-        # Check if the Ollama model is available
-        try:
-            print(f"  -> Checking for Ollama model: '{self.model_name}'...")
-            ollama.show(self.model_name)
-            print("✅ Ollama model found.")
-        except Exception:
-            print(f"❌ Ollama model '{self.model_name}' not found.")
-            print(f"  Please follow the setup instructions to create it.")
-            raise
 
     def _get_tool_descriptions(self) -> Dict[str, str]:
-        """
-        Get descriptions of available tools for better planning.
-        Assumes AVAILABLE_TOOLS is a dictionary where values are objects with a 'description' attribute.
-        """
         descriptions = {}
         for tool_name, tool_obj in AVAILABLE_TOOLS.items():
-            # Use getattr to safely get the description, providing a default if not found
             descriptions[tool_name] = getattr(tool_obj, 'description', f"Tool for {tool_name}")
         return descriptions
 
-    def _generate_response(self, prompt: str, temperature: float = 0.1) -> str:
+    def _generate_response(self, prompt: str, temperature: float = 0.1) -> Dict:
         """Helper function to generate a response from the Ollama model."""
-        try:
-            response = ollama.chat(
-                model=self.model_name,
-                messages=[{'role': 'user', 'content': prompt}],
-                options={"temperature": temperature}
-            )
-            return response['message']['content']
-        except Exception as e:
-            print(f"Error during Ollama generation: {e}")
-            return ""
+        return chat_with_token_counts(
+            model=self.model_name,
+            prompt=prompt,
+            options={"temperature": temperature}
+        )
 
-    def _analyze_topic_complexity(self, topic: str) -> PlanComplexity:
+
+    def _analyze_topic_complexity(self, topic: str) -> Tuple[PlanComplexity, Dict]:
         """Analyze the topic to determine research complexity."""
         prompt = f"""
 Analyze this research topic and classify its complexity:
 
 Topic: "{topic}"
 
-Consider factors like:
-- How many different aspects need to be researched
-- How recent/current the information needs to be
-- How many different sources would be needed
-- Technical complexity
-
 Respond with only one word: "simple", "moderate", or "comprehensive"
 """
         
-        response = self._generate_response(prompt, temperature=0.0)
+        result_data = self._generate_response(prompt, temperature=0.0)
+        response = result_data['response']
         complexity_str = response.strip().lower()
         
+        token_usage = {
+            'prompt_tokens': result_data.get('prompt_tokens', 0),
+            'eval_tokens': result_data.get('eval_tokens', 0),
+            'total_tokens': result_data.get('total_tokens', 0)
+        }
+        
         try:
-            return PlanComplexity(complexity_str)
+            return PlanComplexity(complexity_str), token_usage
         except ValueError:
-            return PlanComplexity.MODERATE  # Default fallback
+            return PlanComplexity.MODERATE, token_usage
 
     def _create_enhanced_prompt(self, topic: str, tool_names: List[str], complexity: PlanComplexity) -> str:
         """Create an enhanced prompt with tool descriptions and examples, including outline generation."""
@@ -282,66 +256,61 @@ Provide ONLY the JSON object. No additional text.
         return None
 
     def generate_plan(self, topic: str, tool_names: Optional[List[str]] = None, 
-                      complexity_override: Optional[PlanComplexity] = None) -> Optional[ResearchPlan]:
+                      complexity_override: Optional[PlanComplexity] = None) -> Tuple[Optional[ResearchPlan], Dict]:
         """
         Generates an enhanced research plan for a given topic.
 
-        Args:
-            topic (str): The topic to research.
-            tool_names (list, optional): Available tool names. Uses AVAILABLE_TOOLS.keys() if None.
-            complexity_override (PlanComplexity, optional): Override automatic complexity detection.
-
         Returns:
-            ResearchPlan: A comprehensive research plan object, or None if generation fails.
+            A tuple containing the ResearchPlan and a dictionary of token usage.
         """
         print(f"🧠 Generating enhanced research plan for: '{topic}'...")
-        
-        # Use provided tools or default to AVAILABLE_TOOLS keys
+        total_tokens = {'prompt_tokens': 0, 'eval_tokens': 0, 'total_tokens': 0}
+
         if tool_names is None:
             tool_names = list(AVAILABLE_TOOLS.keys())
         
-        # Determine complexity
-        complexity = complexity_override or self._analyze_topic_complexity(topic)
+        if complexity_override:
+            complexity, complexity_tokens = complexity_override, {'prompt_tokens': 0, 'eval_tokens': 0, 'total_tokens': 0}
+        else:
+            complexity, complexity_tokens = self._analyze_topic_complexity(topic)
+        
+        total_tokens['prompt_tokens'] += complexity_tokens['prompt_tokens']
+        total_tokens['eval_tokens'] += complexity_tokens['eval_tokens']
+        total_tokens['total_tokens'] += complexity_tokens['total_tokens']
+        
         print(f"  -> Detected complexity: {complexity.value}")
         
-        # Generate plan with retries
         for attempt in range(self.max_retries):
             try:
                 print(f"  -> Attempt {attempt + 1}/{self.max_retries}")
                 
                 prompt = self._create_enhanced_prompt(topic, tool_names, complexity)
-                response = self._generate_response(prompt)
+                result_data = self._generate_response(prompt)
+                response = result_data['response']
+
+                total_tokens['prompt_tokens'] += result_data.get('prompt_tokens', 0)
+                total_tokens['eval_tokens'] += result_data.get('eval_tokens', 0)
+                total_tokens['total_tokens'] += result_data.get('total_tokens', 0)
                 
                 if not response:
-                    print(f"    ❌ Empty response on attempt {attempt + 1}")
                     continue
                 
-                # Extract and parse JSON
                 plan_dict = self._extract_json_from_response(response)
                 if not plan_dict:
-                    print(f"    ❌ Failed to extract JSON on attempt {attempt + 1}")
-                    if attempt == self.max_retries - 1:
-                        print(f"    Raw response (first 200 chars): {response[:200]}...")
                     continue
                 
-                # Add topic to plan dict (crucial for ResearchPlan dataclass)
                 plan_dict['topic'] = topic
                 
-                # Validate and create plan object
                 research_plan = self._validate_and_clean_plan(plan_dict)
                 if research_plan:
                     print("✅ Enhanced research plan generated successfully.")
-                    return research_plan
-                else:
-                    print(f"    ❌ Plan validation failed on attempt {attempt + 1}")
+                    return research_plan, total_tokens
                     
             except Exception as e:
                 print(f"    ❌ Error on attempt {attempt + 1}: {e}")
-                if attempt == self.max_retries - 1:
-                    traceback.print_exc() # Print full traceback on last attempt failure
         
         print("❌ Failed to generate research plan after all attempts.")
-        return None
+        return None, total_tokens
 
     def print_plan_summary(self, plan: ResearchPlan) -> None:
         """Print a formatted summary of the research plan."""

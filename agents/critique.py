@@ -4,17 +4,20 @@ import json
 import re
 import traceback
 import sys
+from typing import Dict
 
 # Add the project root directory to the Python path
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if project_root not in sys.path:
     sys.sys.path.insert(0, project_root)
 
+from agents.ollama_token_counter import chat_with_token_counts
+
 class CritiqueAgent:
     """
     An agent that reviews a generated text against source context and a style sample.
     """
-    def __init__(self, model_name="gemma3"):
+    def __init__(self, model_name="granite3.3-ctx"):
         print("🧐 Initializing Critique Agent...")
         self.model_name = model_name
         try:
@@ -28,18 +31,18 @@ class CritiqueAgent:
     def _generate_response(self, prompt: str) -> str:
         """Helper function to generate a response from the Ollama model."""
         try:
-            response = ollama.chat(
+            response = chat_with_token_counts(
                 model=self.model_name,
                 messages=[{'role': 'user', 'content': prompt}],
                 options={"temperature": 0.0} # Low temperature for deterministic critique
             )
-            return response['message']['content']
+            return response
         except Exception as e:
             print(f"Error during Ollama generation for critique: {e}")
             traceback.print_exc() # Print traceback for debugging
             return ""
 
-    def critique_section(self, topic: str, section_title: str, draft_content: str, context: str, writing_style_json_str: str) -> dict:
+    def critique_section(self, topic: str, section_title: str, draft_content: str, context: str, writing_style_json_str: str) -> Dict:
         """
         Critiques a single section of the article.
 
@@ -51,13 +54,12 @@ class CritiqueAgent:
             writing_style_json_str (str): A JSON string describing the desired writing style.
 
         Returns:
-            dict: A dictionary containing 'critique' (list of suggestions) and 'score' (1-5).
+            dict: A dictionary containing 'critique' (list of suggestions), 'score' (1-5), and token counts.
         """
-        print(f"    -> Critiquing section: '{section_title}'...")
+        print(f"      -> Critiquing section: '{section_title}'...")
         
-        # Limit context and draft to fit within typical LLM context windows
-        context_limited = context[:3000] # Adjust as needed for your model's context window
-        draft_content_limited = draft_content[:3000] # Adjust as needed
+        context_limited = context[:3000]
+        draft_content_limited = draft_content[:3000]
 
         prompt = f"""**Your Role:** You are a meticulous editor. Your task is to review a draft of a blog post section.
 
@@ -96,40 +98,46 @@ Provide ONLY a JSON object with two keys:
 2.  "score": An integer score from 1 (poor, major issues) to 5 (excellent, no issues). Score 5 ONLY if the "critique" list is empty. Otherwise, score based on severity of issues (1-4).
 """
         
-        response_json_str = self._generate_response(prompt)
-        
+        result_data = chat_with_token_counts(
+            model=self.model_name,
+            prompt=prompt,
+            options={"temperature": 0.0}
+        )
+        response_json_str = result_data['response']
+
+        base_return = {
+            "critique": ["Failed to generate valid critique."], "score": 1,
+            'prompt_tokens': result_data.get('prompt_tokens', 0),
+            'eval_tokens': result_data.get('eval_tokens', 0),
+            'total_tokens': result_data.get('total_tokens', 0)
+        }
+
         if not response_json_str:
-            print("    -> ❌ Empty response from critique model.")
-            return {"critique": ["Empty response from critique model."], "score": 1}
+            print("      -> ❌ Empty response from critique model.")
+            base_return["critique"] = ["Empty response from critique model."]
+            return base_return
 
         try:
-            # Use non-greedy regex to find the first JSON object
             json_match = re.search(r'\{.*?\}', response_json_str, re.DOTALL)
             if not json_match:
                 raise json.JSONDecodeError("No JSON object found in the response.", response_json_str, 0)
             
             clean_json_str = json_match.group(0)
-            # FIX: Robustly remove trailing commas before parsing
             clean_json_str = re.sub(r',\s*([}\]])', r'\1', clean_json_str)
             
             critique_plan = json.loads(clean_json_str)
 
-            # Basic validation of the parsed structure
             if not isinstance(critique_plan, dict) or "critique" not in critique_plan or "score" not in critique_plan:
                 raise ValueError("Parsed JSON does not contain expected 'critique' or 'score' keys.")
-            if not isinstance(critique_plan["critique"], list):
-                raise ValueError("'critique' value is not a list.")
-            if not isinstance(critique_plan["score"], (int, float)) or not (1 <= critique_plan["score"] <= 5):
-                raise ValueError("'score' value is not a valid integer between 1 and 5.")
-
-            print("    -> Critique complete.")
-            return critique_plan
+            
+            print("      -> Critique complete.")
+            base_return.update(critique_plan)
+            return base_return
             
         except (json.JSONDecodeError, KeyError, ValueError) as e:
-            print(f"    -> ❌ Failed to parse or validate the critique: {e}")
-            print(f"    -> Raw critique response (first 500 chars): {response_json_str[:500]}...")
-            traceback.print_exc() # Print full traceback for debugging
-            return {"critique": ["Failed to generate a valid critique due to parsing/validation error."], "score": 1}
+            print(f"      -> ❌ Failed to parse or validate the critique: {e}")
+            traceback.print_exc()
+            return base_return
 
 if __name__ == '__main__':
     print("--- Testing CritiqueAgent ---")
