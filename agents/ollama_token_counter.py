@@ -36,7 +36,7 @@ def chat_with_token_counts(
 
     
     options = options or {}
-    options.setdefault('num_predict', 8000)
+    options.setdefault('num_predict', 16000)
     options.setdefault('stop', [])
 
     response = ollama.chat(

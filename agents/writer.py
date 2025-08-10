@@ -68,7 +68,6 @@ class WritingMetrics:
     refinement_iterations: int = 0
     processing_time: float = 0.0
 
-# FIX: Integrated your new fields for coherence into SectionPlan
 @dataclass
 class SectionPlan:
     """Detailed plan for a single article section."""
@@ -83,7 +82,6 @@ class SectionPlan:
     transition_hints: List[str] = field(default_factory=list)  # NEW: Hints for transitions
     connection_points: List[str] = field(default_factory=list) # NEW: Points to connect with other sections
 
-# FIX: Integrated your new fields for coherence into ArticlePlan
 @dataclass
 class ArticlePlan:
     """Comprehensive article planning structure."""
@@ -99,7 +97,6 @@ class ArticlePlan:
     narrative_thread: str = ""  # NEW: Overall narrative thread
     key_arguments: List[str] = field(default_factory=list)  # NEW: Main arguments to maintain
 
-# FIX: Integrated your new fields for coherence into SectionResult
 @dataclass
 class SectionResult:
     """Result of section generation with metadata."""
@@ -111,7 +108,6 @@ class SectionResult:
     final_score: float
     key_concepts: List[str] = field(default_factory=list) # NEW: Key concepts for coherence tracking
 
-# NEW: Added ArticleContext to track coherence throughout the writing process
 @dataclass
 class ArticleContext:
     """Maintains coherence context throughout article generation."""
@@ -255,7 +251,6 @@ class WriterAgent:
         self.max_refinements = 3
         self.min_quality_threshold = 3.5
 
-        # FIX: Initialize the new ArticleContext to track coherence
         self.article_context = ArticleContext()
         self.writing_history = []
 
@@ -266,7 +261,6 @@ class WriterAgent:
             print(f"❌ Ollama model '{self.model_name}' not found for WriterAgent.")
             raise
 
-    # FIX: Reverted to the original _generate_response to remove the broken dependency
     def _generate_response(self, prompt: str, temperature: float = 0.7, max_tokens: int = 2000) -> str:
         try:
             response = ollama.chat(
@@ -284,7 +278,6 @@ class WriterAgent:
             print(f"Error during Ollama generation: {e}")
             return ""
 
-    # FIX: Updated the planning prompt to include the new coherence fields
     def generate_enhanced_plan(self, topic: str, target_word_count: int = 2000,
                                writing_style: WritingStyle = WritingStyle.JOURNALISTIC,
                                target_audience: str = "general public",
@@ -301,7 +294,6 @@ SUGGESTED HIGH-LEVEL OUTLINE (from PlannerAgent):
 Use these as a strong guide for your "sections" titles and overall structure.
 {outline_list_str}
 """
-        # FIX: Modified the prompt to generate the new fields for coherence.
         planning_prompt = f"""
 You are an expert content strategist creating a comprehensive article plan that ensures coherence and flow.
 
@@ -411,7 +403,6 @@ Provide ONLY the JSON object.
             traceback.print_exc()
             return None
 
-    # NEW: Function to build a dynamic context for coherence
     def _build_coherence_context(self, article_plan: ArticlePlan) -> str:
         """Builds a string of the current article context to ensure coherence."""
         context_parts = [
@@ -427,7 +418,6 @@ Provide ONLY the JSON object.
 
         return "\n\n".join(context_parts)
 
-    # NEW: Function to update the coherence context after a section is written
     def _update_article_context(self, section_title: str, content: str):
         """Extracts key info from content and updates the shared ArticleContext."""
         summary_prompt = f"Summarize the following text in one sentence for context in a larger article:\n\n{content[:1000]}"
@@ -496,7 +486,6 @@ SYNTHESIS:
 
         style_profile_str = json.dumps(style_profile, indent=2)
 
-        # FIX: The writing prompt is updated to use the new coherence context.
         section_prompt = f"""
 You are an expert writer crafting a specific section of an article. Follow these requirements precisely:
 
@@ -542,7 +531,6 @@ CRITICAL: Your response must contain ONLY the article section's content.
 
         draft_content = self._generate_response(section_prompt, temperature=0.7, max_tokens=int(section.target_word_count * 2.0))
 
-        # ... (rest of the critique loop is the same as the original file)
         metrics = WritingMetrics()
         refinement_history = []
         sources_used = [chunk[:100] + "..." for chunk in research_chunks[:3]]
@@ -551,7 +539,8 @@ CRITICAL: Your response must contain ONLY the article section's content.
             print(f"     -> Running critique for iteration {iteration + 1}...")
             critique_result = self.critique_agent.critique_section(
                 article_plan.topic, section.title, draft_content,
-                synthesized_context, json.dumps(style_profile)
+                synthesized_context, json.dumps(style_profile),
+                coherence_context # Add this new argument
             )
             current_score = critique_result.get('score', 0.0)
             critiques = critique_result.get('critique', [])
@@ -561,7 +550,6 @@ CRITICAL: Your response must contain ONLY the article section's content.
                 break
             elif critiques and iteration < self.max_refinements - 1:
                 refinement_history.append(f"Iteration {iteration + 1}: {critiques}")
-                # This rewrite function is a simplified placeholder; the original logic is sound.
                 draft_content = self._rewrite_section_with_enhanced_feedback(article_plan, section, draft_content, critiques, style_profile, synthesized_context)
             else:
                 final_score = current_score
@@ -619,7 +607,7 @@ Provide ONLY the complete, revised section content.
 """
         return self._generate_response(rewrite_prompt, temperature=0.6, max_tokens=int(section.target_word_count * 2.0))
 
-    def write_article_from_enhanced_plan(self, article_plan: ArticlePlan, style_profile: Dict[str, Any]) -> Tuple[str, Dict[str, any]]:
+    def write_article_from_enhanced_plan(self, article_plan: ArticlePlan, style_profile: Dict[str, Any]) -> Tuple[str, Dict[str, any], Dict[str, int]]:
         print(f"\n✍️ Writing article: '{article_plan.topic}'")
         sorted_sections = self._sort_sections_by_dependencies(article_plan.sections)
         print(f"  Order of sections: {[s.title for s in sorted_sections]}")
@@ -628,6 +616,8 @@ Provide ONLY the complete, revised section content.
         section_results: Dict[str, SectionResult] = {}
         total_metrics = WritingMetrics()
         total_article_start_time = datetime.now()
+        # Initialize a dictionary to hold token counts
+        writer_tokens = {'prompt_tokens': 0, 'eval_tokens': 0, 'total_tokens': 0}
 
         for section in sorted_sections:
             try:
@@ -637,7 +627,6 @@ Provide ONLY the complete, revised section content.
                 section_results[section.title] = result
                 completed_sections[section.title] = result.content
 
-                # NEW: Update the shared context after each section is successfully written
                 self._update_article_context(section.title, result.content)
 
                 total_metrics.word_count += result.metrics.word_count
@@ -659,10 +648,9 @@ Provide ONLY the complete, revised section content.
         }
 
         print(f"\n✅ Article completed: {total_metrics.word_count} words in {total_metrics.processing_time:.1f}s")
-        return final_article, metadata
+        return final_article, metadata, writer_tokens
 
     def _sort_sections_by_dependencies(self, sections: List[SectionPlan]) -> List[SectionPlan]:
-        # This implementation of topological sort is correct and does not need changes.
         sorted_list = []
         section_map = {sec.title: sec for sec in sections}
         in_degree = {sec.title: len(sec.dependencies) for sec in sections}
@@ -680,7 +668,6 @@ Provide ONLY the complete, revised section content.
         if len(sorted_list) != len(sections):
             unreachable = [sec.title for sec in sections if sec.title not in [s.title for s in sorted_list]]
             print(f"⚠️ Circular dependency detected or missing dependency. Unreachable sections: {unreachable}")
-            # Add remaining sections to avoid crashing, though the order might be suboptimal
             sorted_list.extend([sec for sec in sections if sec.title not in [s.title for s in sorted_list]])
 
         return sorted_list
@@ -690,7 +677,6 @@ Provide ONLY the complete, revised section content.
                                 section_results: Dict[str, SectionResult]) -> str:
         print("     📄 Assembling final article...")
         article_lines = [f"# {article_plan.topic}", ""]
-        # Use the plan's section order to assemble the article correctly
         for section_plan in article_plan.sections:
             if section_plan.title in section_results:
                 result = section_results[section_plan.title]
@@ -700,7 +686,6 @@ Provide ONLY the complete, revised section content.
         return "\n".join(article_lines).strip()
 
     def print_article_metrics(self, metadata: Dict[str, any]) -> None:
-        # This function is for display and does not need changes.
         print(f"\n{'='*60}")
         print(f"📊 ARTICLE GENERATION METRICS")
         print(f"{'='*60}")
