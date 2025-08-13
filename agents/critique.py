@@ -16,7 +16,7 @@ from agents.ollama_token_counter import chat_with_token_counts
 
 class CritiqueAgent:
     """
-    An agent that reviews a generated text against source context, style, and cohesion.
+    An agent that reviews a generated text against source context, persona, and cohesion.
     """
     def __init__(self, model_name="granite3.3-ctx"):
         print("🧐 Initializing Critique Agent...")
@@ -29,22 +29,39 @@ class CritiqueAgent:
             print(f"  Please follow the setup instructions to create it.")
             raise
 
-    def critique_section(self, topic: str, section_title: str, draft_content: str, context: str, writing_style_json_str: str, article_context_summary: str) -> Dict:
+    def critique_section(self, topic: str, section_title: str, draft_content: str, context: str, writing_style_json_str: str, article_context_summary: str, target_word_count: int) -> Dict:
         """
-        Critiques a single section of the article, including article-wide context.
+        Critiques a single section of the article based on a writer's persona.
 
         Args:
             topic (str): The overall topic of the article.
             section_title (str): The title of the section being critiqued.
             draft_content (str): The content of the draft section.
             context (str): The research context for this section (for factual consistency).
-            writing_style_json_str (str): A JSON string describing the desired writing style.
+            writing_style_json_str (str): A JSON string describing the desired writer's persona.
             article_context_summary (str): A summary of the preceding article sections for coherence.
+            target_word_count (int): The target word count for the section.
 
         Returns:
             dict: A dictionary containing 'critique', 'score', and token counts.
         """
         print(f"      -> Critiquing section: '{section_title}' for content and cohesion...")
+
+        # Calculate word count and acceptable range
+        actual_word_count = len(draft_content.split())
+        word_count_tolerance = 0.25 # Allow 25% deviation
+        min_words = int(target_word_count * (1 - word_count_tolerance))
+        max_words = int(target_word_count * (1 + word_count_tolerance))
+
+        # Prepare word count feedback
+        word_count_feedback = ""
+        if not (min_words <= actual_word_count <= max_words):
+            word_count_feedback = f"4. **Word Count Adherence**: The draft has {actual_word_count} words, but the target is {target_word_count}. Please adjust the length to be between {min_words} and {max_words} words."
+        
+        # Check for gibberish at the end of the content
+        gibberish_feedback = ""
+        if re.search(r"(\s?,\s?[a-zA-Z]){5,}$", draft_content.strip()):
+            gibberish_feedback = "5. **Completeness**: The section ends with garbled or incomplete text. The entire section must be rewritten to be a complete, coherent piece of text."
 
         prompt = f"""**Your Role:** You are a meticulous editor. Your task is to review a draft of a blog post section.
 
@@ -56,14 +73,14 @@ class CritiqueAgent:
 {article_context_summary}
 ---
 
+**Writer's Persona Profile (The draft MUST embody this persona):**
+---
+{writing_style_json_str}
+---
+
 **Research Context for This Section (for fact-checking):**
 ---
 {context[:3000]}
----
-
-**Writing Style Profile (to emulate):**
----
-{writing_style_json_str}
 ---
 
 **Draft to Review:**
@@ -72,16 +89,17 @@ class CritiqueAgent:
 ---
 
 **Your Task:**
-Review the draft based on THREE primary criteria and provide actionable feedback:
-1.  **Factual Consistency & Completeness:** Check if the draft accurately represents the Research Context.
-2.  **Style Adherence:** Check if the draft's tone, voice, and structure match the Writing Style Profile.
-3.  **Cohesion & Integration:** Check if the section logically follows the Overall Article Context without repetition.
+Review the draft based on the following criteria and provide actionable feedback.
+1.  **Persona Adherence:** Does the draft's tone, voice, and attitude match the writer's persona profile?
+2.  **Factual Consistency:** Does the draft accurately represent the Research Context?
+3.  **Cohesion & Flow:** Does the section logically follow the Overall Article Context without repetition?
+{word_count_feedback}
+{gibberish_feedback}
 
 **Output Instructions:**
 Provide ONLY a JSON object with two keys:
 1.  "critique": A list of specific, actionable suggestions for improvement. If perfect, return an empty list.
-2.  "score": An integer score from 1 (poor) to 5 (excellent).
-
+2.  "score": An integer score from 1 (poor) to 5 (excellent). A score below 4 requires a rewrite.
 """
         
         result_data = chat_with_token_counts(

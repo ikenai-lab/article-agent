@@ -23,6 +23,7 @@ try:
     if project_root not in sys.path:
         sys.path.insert(0, project_root)
     from agents.critique import CritiqueAgent
+    from agents.ollama_token_counter import chat_with_token_counts
 except (NameError, ImportError):
     # This will allow the script to run standalone without the critique agent
     # for testing purposes, creating a dummy class if it's not found.
@@ -34,7 +35,6 @@ except (NameError, ImportError):
             print("Dummy CritiqueAgent: Performing dummy critique.")
             # Return a reasonable score to allow the pipeline to proceed
             return {'score': 4.5, 'critique': ["Dummy critique: Content is generally good."]}
-
 
 class WritingStyle(Enum):
     ACADEMIC = "academic"
@@ -53,18 +53,17 @@ class SectionType(Enum):
     METHODOLOGY = "methodology"
     RESULTS = "results"
     DISCUSSION = "discussion"
-    # Added a generic 'DEFAULT' type for robustness if LLM gives unparseable types
     DEFAULT = "default"
 
 @dataclass
 class WritingMetrics:
     """Metrics for tracking writing quality and performance."""
     word_count: int = 0
-    readability_score: float = 0.0 # Placeholder for future implementation
-    coherence_score: float = 0.0 # Placeholder for future implementation
-    style_consistency: float = 0.0 # Placeholder for future implementation
-    factual_accuracy: float = 0.0 # Placeholder for future implementation
-    engagement_score: float = 0.0 # Placeholder for future implementation
+    readability_score: float = 0.0
+    coherence_score: float = 0.0
+    style_consistency: float = 0.0
+    factual_accuracy: float = 0.0
+    engagement_score: float = 0.0
     refinement_iterations: int = 0
     processing_time: float = 0.0
 
@@ -79,8 +78,8 @@ class SectionPlan:
     dependencies: List[str] = field(default_factory=list)
     research_queries: List[str] = field(default_factory=list)
     priority: int = 1
-    transition_hints: List[str] = field(default_factory=list)  # NEW: Hints for transitions
-    connection_points: List[str] = field(default_factory=list) # NEW: Points to connect with other sections
+    transition_hints: List[str] = field(default_factory=list)
+    connection_points: List[str] = field(default_factory=list)
 
 @dataclass
 class ArticlePlan:
@@ -94,8 +93,8 @@ class ArticlePlan:
     research_requirements: List[str]
     success_criteria: List[str]
     estimated_time: str
-    narrative_thread: str = ""  # NEW: Overall narrative thread
-    key_arguments: List[str] = field(default_factory=list)  # NEW: Main arguments to maintain
+    narrative_thread: str = ""
+    key_arguments: List[str] = field(default_factory=list)
 
 @dataclass
 class SectionResult:
@@ -106,15 +105,15 @@ class SectionResult:
     sources_used: List[str]
     refinement_history: List[str]
     final_score: float
-    key_concepts: List[str] = field(default_factory=list) # NEW: Key concepts for coherence tracking
+    key_concepts: List[str] = field(default_factory=list)
 
 @dataclass
 class ArticleContext:
     """Maintains coherence context throughout article generation."""
-    established_concepts: Dict[str, str] = field(default_factory=dict)  # concept -> definition
+    established_concepts: Dict[str, str] = field(default_factory=dict)
     narrative_progression: List[str] = field(default_factory=list)
-    section_summaries: Dict[str, str] = field(default_factory=dict)  # section -> brief summary
-    key_evidence: List[str] = field(default_factory=list) # Important evidence to reference
+    section_summaries: Dict[str, str] = field(default_factory=dict)
+    key_evidence: List[str] = field(default_factory=list)
 
 class RAGContext:
     """Enhanced RAG context with better retrieval and caching."""
@@ -261,11 +260,11 @@ class WriterAgent:
             print(f"❌ Ollama model '{self.model_name}' not found for WriterAgent.")
             raise
 
-    def _generate_response(self, prompt: str, temperature: float = 0.7, max_tokens: int = 2000) -> str:
+    def _generate_response(self, prompt: str, temperature: float = 0.7, max_tokens: int = 2000) -> Tuple[str, Dict[str, int]]:
         try:
-            response = ollama.chat(
+            result_data = chat_with_token_counts(
                 model=self.model_name,
-                messages=[{'role': 'user', 'content': prompt}],
+                prompt=prompt,
                 options={
                     "temperature": temperature,
                     "num_predict": max_tokens,
@@ -273,135 +272,78 @@ class WriterAgent:
                     "repeat_penalty": 1.1
                 }
             )
-            return response['message']['content']
+            tokens = {
+                'prompt_tokens': result_data.get('prompt_tokens', 0),
+                'eval_tokens': result_data.get('eval_tokens', 0),
+                'total_tokens': result_data.get('total_tokens', 0)
+            }
+            return result_data['response'], tokens
         except Exception as e:
             print(f"Error during Ollama generation: {e}")
-            return ""
+            return "", {'prompt_tokens': 0, 'eval_tokens': 0, 'total_tokens': 0}
 
     def generate_enhanced_plan(self, topic: str, target_word_count: int = 2000,
                                writing_style: WritingStyle = WritingStyle.JOURNALISTIC,
                                target_audience: str = "general public",
-                               suggested_outline: Optional[List[str]] = None) -> Optional[ArticlePlan]:
-        print(f"📋 Generating enhanced article plan for: '{topic}'...")
+                               suggested_outline: Optional[List[str]] = None) -> Tuple[Optional[ArticlePlan], Dict[str, int]]:
+        """
+        Constructs a detailed ArticlePlan directly from the PlannerAgent's narrative outline.
+        This method no longer calls an LLM, removing a source of errors and redundancy.
+        """
+        print("📋 Translating narrative outline into detailed article plan...")
+        
+        if not suggested_outline:
+            print("❌ Cannot generate plan: The suggested_outline from the PlannerAgent is empty.")
+            return None, {}
 
-        valid_section_types = "|".join([st.value for st in SectionType if st != SectionType.DEFAULT])
+        sections = []
+        num_sections = len(suggested_outline)
+        words_per_section = target_word_count // num_sections if num_sections > 0 else target_word_count
 
-        outline_guidance = ""
-        if suggested_outline:
-            outline_list_str = "\n".join([f"- {item}" for item in suggested_outline])
-            outline_guidance = f"""
-SUGGESTED HIGH-LEVEL OUTLINE (from PlannerAgent):
-Use these as a strong guide for your "sections" titles and overall structure.
-{outline_list_str}
-"""
-        planning_prompt = f"""
-You are an expert content strategist creating a comprehensive article plan that ensures coherence and flow.
+        for i, outline_item in enumerate(suggested_outline):
+            parts = outline_item.split(':', 1)
+            title = parts[0].strip()
+            description = parts[1].strip() if len(parts) > 1 else f"Discuss {title}"
+            
+            # Simple logic to determine section type based on order
+            section_type = SectionType.INTRODUCTION
+            if i > 0 and i < num_sections - 1:
+                section_type = SectionType.ANALYSIS
+            elif i == num_sections - 1:
+                section_type = SectionType.CONCLUSION
 
-ARTICLE REQUIREMENTS:
-- Topic: "{topic}"
-- Target word count: {target_word_count} words
-- Writing style: {writing_style.value}
-- Target audience: {target_audience}
-
-{outline_guidance}
-
-Create a detailed plan following this EXACT JSON structure. Ensure the final output is a single, valid JSON object.
-{{
-  "topic": "{topic}",
-  "target_word_count": {target_word_count},
-  "writing_style": "{writing_style.value}",
-  "target_audience": "{target_audience}",
-  "key_themes": ["theme1", "theme2", "theme3"],
-  "narrative_thread": "The overarching story or argument that connects all sections",
-  "key_arguments": ["main argument 1", "main argument 2"],
-  "sections": [
-    {{
-      "title": "Section Title",
-      "section_type": "{valid_section_types}",
-      "key_points": ["point1", "point2", "point3"],
-      "target_word_count": 400,
-      "dependencies": [],
-      "research_queries": ["query1", "query2"],
-      "tone": "engaging|analytical|informative|persuasive|neutral",
-      "priority": 1,
-      "transition_hints": ["How this section connects to the next"],
-      "connection_points": ["Key concepts that link to other sections"]
-    }}
-  ],
-  "research_requirements": ["specific research needs"],
-  "success_criteria": ["criteria for successful article"],
-  "estimated_time": "time estimate (e.g., '1-2 hours')"
-}}
-
-PLANNING GUIDELINES:
-1. Create 5-7 sections with a logical, coherent flow.
-2. Ensure each section advances the 'narrative_thread' and supports the 'key_arguments'.
-3. Include 'transition_hints' that explain how each section connects to the next.
-4. Add 'connection_points' that identify recurring themes and concepts.
-5. If a SUGGESTED OUTLINE is provided, use its titles as the primary basis for your "sections" titles.
-
-Provide ONLY the JSON object.
-"""
-
-        response = self._generate_response(planning_prompt, temperature=0.5)
-
-        try:
-            json_match = re.search(r'\{.*\}', response, re.DOTALL)
-            if not json_match:
-                raise json.JSONDecodeError("No JSON object found in response", response, 0)
-
-            json_string = json_match.group(0)
-            json_string = re.sub(r",\s*([}\]])", r"\1", json_string)
-            plan_dict = json.loads(json_string)
-
-            sections = []
-            parsed_section_titles = {s_data.get('title') for s_data in plan_dict.get('sections', []) if s_data.get('title')}
-
-            for section_data in plan_dict.get('sections', []):
-                section_type_str_raw = section_data.get('section_type', 'analysis').upper()
-                found_section_type = SectionType.DEFAULT
-                for st_enum in SectionType:
-                    if st_enum != SectionType.DEFAULT and st_enum.value.upper() in section_type_str_raw:
-                        found_section_type = st_enum
-                        break
-
-                section = SectionPlan(
-                    title=section_data.get('title', 'Untitled Section'),
-                    section_type=found_section_type,
-                    key_points=section_data.get('key_points', []),
-                    target_word_count=section_data.get('target_word_count', 300),
-                    tone=section_data.get('tone', 'informative'),
-                    dependencies=[str(dep).strip() for dep in section_data.get('dependencies', []) if str(dep).strip() in parsed_section_titles],
-                    research_queries=section_data.get('research_queries', []),
-                    priority=section_data.get('priority', 1),
-                    transition_hints=section_data.get('transition_hints', []),
-                    connection_points=section_data.get('connection_points', [])
-                )
-                sections.append(section)
-
-            validated_writing_style = WritingStyle[plan_dict.get('writing_style', writing_style.value).upper()]
-
-            article_plan = ArticlePlan(
-                topic=plan_dict.get('topic', topic),
-                target_word_count=plan_dict.get('target_word_count', target_word_count),
-                writing_style=validated_writing_style,
-                target_audience=plan_dict.get('target_audience', target_audience),
-                key_themes=plan_dict.get('key_themes', []),
-                sections=sections,
-                research_requirements=plan_dict.get('research_requirements', []),
-                success_criteria=plan_dict.get('success_criteria', []),
-                estimated_time=plan_dict.get('estimated_time', 'Not specified'),
-                narrative_thread=plan_dict.get('narrative_thread', ''),
-                key_arguments=plan_dict.get('key_arguments', [])
+            section = SectionPlan(
+                title=title,
+                section_type=section_type,
+                key_points=[description],  # The description from the planner becomes the key point
+                target_word_count=words_per_section,
+                tone="informative", # Default tone
+                dependencies= [s.title for s in sections], # Depends on all previous sections
+                research_queries=[f"{topic} {title}", description],
+                priority=i + 1,
+                transition_hints=[f"Lead into the next topic: {suggested_outline[i+1].split(':')[0].strip()}" if i < num_sections - 1 else "Conclude the article."],
+                connection_points=[] # Can be enhanced later if needed
             )
+            sections.append(section)
 
-            print("✅ Enhanced article plan generated successfully.")
-            return article_plan
+        article_plan = ArticlePlan(
+            topic=topic,
+            target_word_count=target_word_count,
+            writing_style=writing_style,
+            target_audience=target_audience,
+            key_themes=[],
+            sections=sections,
+            research_requirements=[],
+            success_criteria=[],
+            estimated_time="1-2 hours",
+            narrative_thread=f"A narrative exploring the topic of {topic}.",
+            key_arguments=[]
+        )
 
-        except (json.JSONDecodeError, KeyError, ValueError) as e:
-            print(f"❌ Failed to parse article plan: {e}")
-            traceback.print_exc()
-            return None
+        print("✅ Detailed article plan created successfully from narrative outline.")
+        # No LLM call, so no token usage to return
+        return article_plan, {}
+
 
     def _build_coherence_context(self, article_plan: ArticlePlan) -> str:
         """Builds a string of the current article context to ensure coherence."""
@@ -412,24 +354,33 @@ Provide ONLY the JSON object.
         if self.article_context.section_summaries:
             summaries = "\n".join(f"- {title}: {summary}" for title, summary in self.article_context.section_summaries.items())
             context_parts.append(f"SUMMARY OF PREVIOUS SECTIONS:\n{summaries}")
-        if self.article_context.established_concepts:
-            concepts = "\n".join(f"- {concept}: {definition}" for concept, definition in self.article_context.established_concepts.items())
-            context_parts.append(f"ESTABLISHED CONCEPTS (Do not redefine, but refer to them):\n{concepts}")
+        if self.article_context.key_evidence:
+            evidence = ", ".join(self.article_context.key_evidence)
+            context_parts.append(f"FACTS & ENTITIES ALREADY MENTIONED (Do NOT re-introduce these. You can refer to them, but assume the reader already knows them): {evidence}")
 
         return "\n\n".join(context_parts)
 
     def _update_article_context(self, section_title: str, content: str):
         """Extracts key info from content and updates the shared ArticleContext."""
         summary_prompt = f"Summarize the following text in one sentence for context in a larger article:\n\n{content[:1000]}"
-        summary = self._generate_response(summary_prompt, temperature=0.2, max_tokens=150)
+        summary, _ = self._generate_response(summary_prompt, temperature=0.2, max_tokens=150)
         self.article_context.section_summaries[section_title] = summary.strip()
 
-        concepts_prompt = f"List the 3-5 most important new concepts or terms introduced in this text, separated by commas:\n\n{content[:1500]}"
-        concepts_str = self._generate_response(concepts_prompt, temperature=0.2, max_tokens=100)
-        new_concepts = [c.strip() for c in concepts_str.split(',') if c.strip()]
-        for concept in new_concepts:
-            if concept not in self.article_context.established_concepts:
-                self.article_context.established_concepts[concept] = f"Introduced in '{section_title}'"
+        entities_prompt = f"""
+From the following text, extract a list of key entities (companies, people, specific data points like layoff numbers or percentages) that are central to this section.
+Return a comma-separated list. For example: Google, Chegg, 12,000 employees, 17%.
+
+TEXT:
+---
+{content[:1500]}
+---
+
+KEY ENTITIES:
+"""
+        entities_str, _ = self._generate_response(entities_prompt, temperature=0.1, max_tokens=150)
+        new_entities = [e.strip().lower() for e in entities_str.split(',') if e.strip()]
+        self.article_context.key_evidence.extend(new_entities)
+        self.article_context.key_evidence = sorted(list(set(self.article_context.key_evidence)))
 
     def _compress_and_synthesize_context(self, chunks: List[str], confidence_scores: Dict[str, float],
                                          section: SectionPlan, max_synthesis_words: int = 400) -> str:
@@ -437,7 +388,6 @@ Provide ONLY the JSON object.
         if not chunks:
             return "No research context was found for this section."
 
-        # Weight chunks based on relevance to key points and connection points
         weighted_chunks = []
         for chunk in chunks:
             score = confidence_scores.get(chunk, 0.0)
@@ -463,13 +413,16 @@ SYNTHESIS REQUIREMENTS:
 
 SYNTHESIS:
 """
-        return self._generate_response(synthesis_prompt, temperature=0.4, max_tokens=int(max_synthesis_words * 1.2))
+        synthesis, _ = self._generate_response(synthesis_prompt, temperature=0.4, max_tokens=int(max_synthesis_words * 1.2))
+        return synthesis
 
     def _write_section_with_enhanced_context(self, article_plan: ArticlePlan, section: SectionPlan,
                                              style_profile: Dict[str, Any],
-                                             completed_sections: Dict[str, str]) -> SectionResult:
+                                             completed_sections: Dict[str, str]) -> Tuple[SectionResult, Dict[str, int]]:
         start_time = datetime.now()
         print(f"\n   🎯 Writing section: '{section.title}' ({section.section_type.value})")
+
+        section_tokens = {'prompt_tokens': 0, 'eval_tokens': 0, 'total_tokens': 0}
 
         all_research_queries = section.research_queries + [f"{article_plan.topic} {section.title}"] + section.connection_points
         research_chunks, confidence_scores_dict = self.rag_context.get_contextual_chunks(
@@ -480,56 +433,45 @@ SYNTHESIS:
             research_chunks, confidence_scores_dict, section
         )
 
-        # Build dependency and coherence contexts
-        dependency_context = "\n\n".join([f"--- Content from '{title}' ---{content[:500]}..." for title, content in completed_sections.items() if title in section.dependencies])
         coherence_context = self._build_coherence_context(article_plan)
-
-        style_profile_str = json.dumps(style_profile, indent=2)
+        persona_profile_str = json.dumps(style_profile, indent=2)
 
         section_prompt = f"""
-You are an expert writer crafting a specific section of an article. Follow these requirements precisely:
+You are an expert writer tasked with embodying a specific persona to write one section of an article.
 
-ARTICLE CONTEXT:
-- Overall topic: "{article_plan.topic}"
-- Target audience: {article_plan.target_audience}
-- Section title: "{section.title}"
-- Target word count for this section: {section.target_word_count} words
-
-KEY POINTS TO ADDRESS IN THIS SECTION:
-{chr(10).join(f"• {point}" for point in section.key_points)}
-
-WRITING STYLE REQUIREMENTS (You must follow these rules):
+**PERSONA PROFILE (You MUST adopt this persona):**
 ---
-{style_profile_str}
+{persona_profile_str}
 ---
+Your primary goal is to write in this voice and style consistently.
 
-COHERENCE CONTEXT (CRITICAL: maintain consistency with this):
+**SECTION GOAL:**
+- **Section Title (for your context only, do not repeat):** "{section.title}"
+- **Purpose:** You need to write the body content that fulfills the narrative purpose of this section, as part of the larger article on "{article_plan.topic}".
+- **Target Word Count:** Approximately {section.target_word_count} words.
+- **Formatting:** If presenting a list of statistics, companies, or data points, use markdown bullet points (`* Item`) for clarity. Otherwise, write in paragraphs.
+
+**MEMORY & COHERENCE (CRITICAL):**
+You are not writing in a vacuum. Build upon what's already been written and **AVOID REPETITION.**
 ---
 {coherence_context}
 ---
+The facts/entities listed above are known. Your task is to introduce NEW information or analysis from the research context below.
 
-RESEARCH CONTEXT (Use ONLY this information for facts):
+**RESEARCH CONTEXT (Source of new facts for this section):**
 ---
 {synthesized_context}
 ---
 
-DEPENDENCY CONTEXT (Content from previous sections, do NOT repeat):
----
-{dependency_context if dependency_context else "No dependency context available."}
----
+**ABSOLUTE RULES:**
+1.  **DO NOT** include the section title or any markdown headings (e.g., ##) in your output.
+2.  **DO NOT** write fragmented or incomplete sentences. Your output must be a complete, coherent text.
+3.  **Your response must be ONLY the text content of the section body.**
 
-WRITING INSTRUCTIONS:
-1.  Write ONLY the body content for this section. Do NOT repeat the section title.
-2.  **COHERENCE IS PRIORITY**: Your goal is to build upon the COHERENCE CONTEXT. Advance the narrative. Do NOT repeat facts or themes already covered.
-3.  Address all key points using the RESEARCH CONTEXT.
-4.  Weave in themes from the 'connection_points': {', '.join(section.connection_points)}.
-5.  End the section with a sentence that hints at the next topic, using these hints: {', '.join(section.transition_hints)}.
-6.  **CRITICAL**: **DO NOT** quote from the original style sample. Follow the style rules to create original content.
-
-CRITICAL: Your response must contain ONLY the article section's content.
+**OUTPUT ONLY THE SECTION BODY CONTENT.**
 """
-
-        draft_content = self._generate_response(section_prompt, temperature=0.7, max_tokens=int(section.target_word_count * 2.0))
+        draft_content, draft_tokens = self._generate_response(section_prompt, temperature=0.7, max_tokens=int(section.target_word_count * 3.5) + 300)
+        section_tokens['total_tokens'] += draft_tokens['total_tokens']
 
         metrics = WritingMetrics()
         refinement_history = []
@@ -540,17 +482,19 @@ CRITICAL: Your response must contain ONLY the article section's content.
             critique_result = self.critique_agent.critique_section(
                 article_plan.topic, section.title, draft_content,
                 synthesized_context, json.dumps(style_profile),
-                coherence_context # Add this new argument
+                coherence_context, section.target_word_count
             )
+            section_tokens['total_tokens'] += critique_result.get('total_tokens', 0)
             current_score = critique_result.get('score', 0.0)
             critiques = critique_result.get('critique', [])
 
-            if current_score >= self.min_quality_threshold:
+            if current_score >= self.min_quality_threshold and not any("word count" in c.lower() for c in critiques) and not any("completeness" in c.lower() for c in critiques):
                 final_score = current_score
                 break
             elif critiques and iteration < self.max_refinements - 1:
                 refinement_history.append(f"Iteration {iteration + 1}: {critiques}")
-                draft_content = self._rewrite_section_with_enhanced_feedback(article_plan, section, draft_content, critiques, style_profile, synthesized_context)
+                draft_content, rewrite_tokens = self._rewrite_section_with_enhanced_feedback(article_plan, section, draft_content, critiques, style_profile, synthesized_context)
+                section_tokens['total_tokens'] += rewrite_tokens['total_tokens']
             else:
                 final_score = current_score
                 break
@@ -560,7 +504,7 @@ CRITICAL: Your response must contain ONLY the article section's content.
         metrics.processing_time = processing_time
         metrics.refinement_iterations = len(refinement_history)
 
-        return SectionResult(
+        result = SectionResult(
             heading=section.title,
             content=draft_content,
             metrics=metrics,
@@ -568,44 +512,43 @@ CRITICAL: Your response must contain ONLY the article section's content.
             refinement_history=refinement_history,
             final_score=final_score
         )
+        return result, section_tokens
 
     def _rewrite_section_with_enhanced_feedback(self, article_plan: ArticlePlan, section: SectionPlan,
                                                 draft_content: str, critiques: List[str],
-                                                style_profile: Dict[str, Any], context: str) -> str:
+                                                style_profile: Dict[str, Any], context: str) -> Tuple[str, Dict[str, int]]:
         critique_points = "\n".join(f"• {critique}" for critique in critiques)
         style_profile_str = json.dumps(style_profile, indent=2)
         rewrite_prompt = f"""
-Revise a section of an article based on editorial feedback.
+You are revising a single article section based on editorial feedback. You MUST maintain the persona from the style profile.
 
-ORIGINAL ARTICLE TOPIC: "{article_plan.topic}"
-SECTION TITLE: "{section.title}"
-CURRENT DRAFT:
----
-{draft_content}
----
-
-EDITORIAL FEEDBACK TO ADDRESS:
-{critique_points}
-
-REQUIRED WRITING STYLE:
+**PERSONA PROFILE (Embody this):**
 ---
 {style_profile_str}
 ---
 
-SUPPORTING CONTEXT (for factual accuracy):
+**ORIGINAL DRAFT:**
+---
+{draft_content}
+---
+
+**EDITORIAL FEEDBACK (You must address these points):**
+{critique_points}
+
+**SUPPORTING CONTEXT (for factual accuracy):**
 ---
 {context[:1000]}...
 ---
 
-REVISION INSTRUCTIONS:
-1. Address each point in the editorial feedback specifically.
-2. Maintain the target word count ({section.target_word_count} words).
-3. Preserve the required writing style.
-4. **DO NOT** quote from the original style sample.
+**REVISION INSTRUCTIONS:**
+1.  Address every point in the editorial feedback.
+2.  Maintain the target word count ({section.target_word_count} words).
+3.  Strictly adhere to the persona profile.
+4.  Ensure the revised section is complete and does not end abruptly.
 
-Provide ONLY the complete, revised section content.
+Provide ONLY the complete, revised section content. Do not include the title.
 """
-        return self._generate_response(rewrite_prompt, temperature=0.6, max_tokens=int(section.target_word_count * 2.0))
+        return self._generate_response(rewrite_prompt, temperature=0.6, max_tokens=int(section.target_word_count * 3.5) + 300)
 
     def write_article_from_enhanced_plan(self, article_plan: ArticlePlan, style_profile: Dict[str, Any]) -> Tuple[str, Dict[str, any], Dict[str, int]]:
         print(f"\n✍️ Writing article: '{article_plan.topic}'")
@@ -616,14 +559,15 @@ Provide ONLY the complete, revised section content.
         section_results: Dict[str, SectionResult] = {}
         total_metrics = WritingMetrics()
         total_article_start_time = datetime.now()
-        # Initialize a dictionary to hold token counts
         writer_tokens = {'prompt_tokens': 0, 'eval_tokens': 0, 'total_tokens': 0}
 
         for section in sorted_sections:
             try:
-                result = self._write_section_with_enhanced_context(
+                result, section_tokens = self._write_section_with_enhanced_context(
                     article_plan, section, style_profile, completed_sections
                 )
+                writer_tokens['total_tokens'] += section_tokens['total_tokens']
+
                 section_results[section.title] = result
                 completed_sections[section.title] = result.content
 
@@ -651,27 +595,9 @@ Provide ONLY the complete, revised section content.
         return final_article, metadata, writer_tokens
 
     def _sort_sections_by_dependencies(self, sections: List[SectionPlan]) -> List[SectionPlan]:
-        sorted_list = []
-        section_map = {sec.title: sec for sec in sections}
-        in_degree = {sec.title: len(sec.dependencies) for sec in sections}
-        queue = [sec for sec in sections if in_degree[sec.title] == 0]
-
-        while queue:
-            current = queue.pop(0)
-            sorted_list.append(current)
-            for other_sec in sections:
-                if current.title in other_sec.dependencies:
-                    in_degree[other_sec.title] -= 1
-                    if in_degree[other_sec.title] == 0:
-                        queue.append(other_sec)
-
-        if len(sorted_list) != len(sections):
-            unreachable = [sec.title for sec in sections if sec.title not in [s.title for s in sorted_list]]
-            print(f"⚠️ Circular dependency detected or missing dependency. Unreachable sections: {unreachable}")
-            sorted_list.extend([sec for sec in sections if sec.title not in [s.title for s in sorted_list]])
-
-        return sorted_list
-
+        # With the new planner logic, sections are already in order.
+        # This function remains for robustness but is simpler.
+        return sections
 
     def _assemble_final_article(self, article_plan: ArticlePlan,
                                 section_results: Dict[str, SectionResult]) -> str:
@@ -680,7 +606,17 @@ Provide ONLY the complete, revised section content.
         for section_plan in article_plan.sections:
             if section_plan.title in section_results:
                 result = section_results[section_plan.title]
-                article_lines.extend([f"## {result.heading}", "", result.content, ""])
+                clean_content = result.content.strip()
+
+                if clean_content.lower().startswith(result.heading.lower()):
+                    clean_content = clean_content[len(result.heading):].lstrip()
+                    clean_content = clean_content.lstrip('#').lstrip()
+
+
+                article_lines.append(f"## {result.heading}")
+                article_lines.append("")
+                article_lines.append(clean_content)
+                article_lines.append("")
             else:
                 article_lines.extend([f"## {section_plan.title}", "", "*(Content could not be generated.)*", ""])
         return "\n".join(article_lines).strip()

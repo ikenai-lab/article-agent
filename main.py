@@ -10,18 +10,14 @@ from dataclasses import asdict # To convert dataclasses to dicts for JSON serial
 import re
 
 # Add the project root directory to the Python path
-# This ensures that imports like 'agents.planner' work correctly.
-# --- NO CHANGE HERE ---
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 # Import agents and tools
-# --- CHANGE 1: Import the new StyleAnalyzerAgent ---
 from agents.planner import PlannerAgent, ResearchPlan, PlanStep
 from agents.writer import WriterAgent, RAGContext, ArticlePlan, WritingStyle
-from agents.style_analyzer import StyleAnalyzerAgent # New import
-# Import AVAILABLE_TOOLS from your tools module
+from agents.style_analyzer import StyleAnalyzerAgent
 try:
     from agents.tools import AVAILABLE_TOOLS
     from agents.rag_builder import build_vector_store 
@@ -30,7 +26,6 @@ except ImportError as e:
     sys.exit(1)
 
 def execute_research_step(step: PlanStep, available_tools: dict) -> str:
-    # --- NO CHANGE IN THIS FUNCTION ---
     tool_name = step.tool
     query = step.query
     if tool_name not in available_tools:
@@ -72,8 +67,8 @@ def run_pipeline(topic: str, style_file: str, target_word_count: int,
     os.makedirs(VECTOR_STORE_DIR, exist_ok=True)
 
     try:
-        # --- Phase 1: Planning & Agentic Research (NO CHANGES HERE) ---
-        print("\n--- Running Phase 1: Planning & Agentic Research ---")
+        # --- Phase 1: Narrative Planning & Research ---
+        print("\n--- Running Phase 1: Narrative Planning & Research ---")
         
         if not force_refresh and os.path.exists(COMBINED_CONTEXT_FILE) and os.path.exists(os.path.join(VECTOR_STORE_DIR, 'faiss_index.bin')):
             print(f"✅ Found cached context at '{COMBINED_CONTEXT_FILE}' and vector store. Skipping research. Use --force-refresh to override.")
@@ -122,13 +117,14 @@ def run_pipeline(topic: str, style_file: str, target_word_count: int,
             build_vector_store([COMBINED_CONTEXT_FILE], vector_store_dir=VECTOR_STORE_DIR) 
             print(f"✅ RAG knowledge base built successfully in '{VECTOR_STORE_DIR}'.")
 
-        # --- CHANGE 2: ADDED Style Analysis Phase ---
-        print("\n--- Running Phase 1.7: Analyzing Writing Style ---")
+        # --- Phase 1.7: Defining the Writer's Persona ---
+        print("\n--- Running Phase 1.7: Defining Writer's Persona ---")
         try:
             with open(style_file, 'r', encoding='utf-8') as f:
                 style_sample_text = f.read()
             
-            style_analyzer = StyleAnalyzerAgent() # Pass your ollama instance here
+            style_analyzer = StyleAnalyzerAgent()
+            # The 'style_profile' is now a richer 'persona_profile'
             style_profile, style_tokens = style_analyzer.analyze_style(style_sample_text)
 
             total_prompt_tokens += style_tokens.get('prompt_tokens', 0)
@@ -136,26 +132,27 @@ def run_pipeline(topic: str, style_file: str, target_word_count: int,
             total_tokens += style_tokens.get('total_tokens', 0)
 
             if not style_profile:
-                print("❌ Could not generate a style profile. Aborting.")
+                print("❌ Could not generate a persona profile. Aborting.")
                 return
         except FileNotFoundError:
             print(f"❌ Style file not found at '{style_file}'. Aborting.")
             return
 
-        # --- Phase 2: Article Writing with Critique Loop ---
+        # --- Phase 2: Article Writing with Persona and Critique Loop ---
         print("\n--- Running Phase 2: Writing Article ---")
         
         rag_context = RAGContext(vector_store_dir=VECTOR_STORE_DIR)
         writer_agent = WriterAgent(rag_context=rag_context)
         
-        print("\n--- Generating Article Plan (Outline) ---")
-        article_plan: Optional[ArticlePlan] = writer_agent.generate_enhanced_plan(
+        print("\n--- Generating Detailed Article Plan ---")
+        article_plan, plan_tokens = writer_agent.generate_enhanced_plan(
             topic=topic,
             target_word_count=target_word_count,
             writing_style=writing_style,
             target_audience=target_audience,
-            suggested_outline=research_plan.suggested_outline
+            suggested_outline=research_plan.suggested_outline # Passing the narrative outline
         )
+        total_tokens += plan_tokens.get('total_tokens', 0)
         
         if not article_plan:
             print("\n❌❌❌ Pipeline Failed: Could not generate an article plan. ❌❌❌")
@@ -163,12 +160,11 @@ def run_pipeline(topic: str, style_file: str, target_word_count: int,
 
         print("\n--- Outline Approval ---")
         print(f"Topic: {article_plan.topic}")
-        print("\nSections:")
+        print("\nNarrative Sections:")
         for i, section in enumerate(article_plan.sections):
-            dependencies_str = f" (Depends on: {', '.join(section.dependencies)})" if section.dependencies else ""
-            print(f"  {i+1}. {section.title} [{section.section_type.value}]{dependencies_str}")
+            print(f"  {i+1}. {section.title}")
         
-        approve = input("\nDo you approve this outline? (y/n): ").lower().strip()
+        approve = input("\nDo you approve this narrative outline? (y/n): ").lower().strip()
         
         if approve != 'y':
             print("\n🛑 Outline rejected by user. Aborting pipeline.")
@@ -176,12 +172,8 @@ def run_pipeline(topic: str, style_file: str, target_word_count: int,
             
         print("✅ Outline approved. Proceeding with article generation...")
         
-        # --- CHANGE 3: Updated the call to the writer agent ---
-        # Pass the generated 'style_profile' dictionary instead of the 'style_file' path.
+        # Pass the generated 'persona_profile' to the writer agent.
         final_article_content, metadata, writer_tokens = writer_agent.write_article_from_enhanced_plan(article_plan, style_profile)
-
-        total_prompt_tokens += writer_tokens.get('prompt_tokens', 0)
-        total_eval_tokens += writer_tokens.get('eval_tokens', 0)
         total_tokens += writer_tokens.get('total_tokens', 0)
 
         if final_article_content:
@@ -196,15 +188,14 @@ def run_pipeline(topic: str, style_file: str, target_word_count: int,
                 f.write(final_article_content)
             print(f"\n🎉🎉🎉 Pipeline Complete! Article saved to '{md_filename}' 🎉🎉🎉")
 
-            html_content = markdown2.markdown(final_article_content)
+            # Simple markdown to HTML conversion
+            html_content = markdown2.markdown(final_article_content, extras=["fenced-code-blocks", "tables"])
             with open(html_filename, 'w', encoding='utf-8') as f:
                 f.write(html_content)
             print(f"✅ Article also saved as HTML to: '{html_filename}'")
 
             writer_agent.print_article_metrics(metadata)
             print("\n--- 📊 Total Token Usage ---")
-            print(f"  Total Prompt Tokens: {total_prompt_tokens}")
-            print(f"  Total Evaluation Tokens: {total_eval_tokens}")
             print(f"  Grand Total Tokens: {total_tokens}")
             print("--------------------------")
         else:
@@ -215,7 +206,6 @@ def run_pipeline(topic: str, style_file: str, target_word_count: int,
         traceback.print_exc()
 
 if __name__ == '__main__':
-    # --- NO CHANGES IN ARGPARSER ---
     parser = argparse.ArgumentParser(description="An agentic CLI tool to generate a Medium article.")
     
     parser.add_argument('--topic', type=str, required=True, help="The topic of the article to generate.")
@@ -243,4 +233,4 @@ if __name__ == '__main__':
         writing_style=WritingStyle[args.writing_style.upper()],
         target_audience=args.target_audience,
         force_refresh=args.force_refresh
-    )
+    ) 

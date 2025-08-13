@@ -254,18 +254,14 @@ Respond with only one word: "simple", "moderate", or "comprehensive"
         tool_info = []
         for tool in tool_names:
             description = self.tool_descriptions.get(tool, "General purpose tool")
-            pattern = self.tool_query_patterns.get(tool, {})
-            
             tool_info.append(f"- {tool}: {description}")
-            if pattern:
-                tool_info.append(f"   Best queries: {pattern.get('style', 'standard queries')}, {pattern.get('optimal_length', '3-5 words')}")
         
         tools_section = "\n".join(tool_info)
         
         complexity_guidance = {
-            PlanComplexity.SIMPLE: "Create 2-3 focused research steps with highly targeted queries. Use 1-2 primary tools. Simple 3-section outline.",
-            PlanComplexity.MODERATE: "Create 4-6 research steps with optimized queries covering main aspects. Use 2-3 complementary tools. 4-5 section outline.", 
-            PlanComplexity.COMPREHENSIVE: "Create 6-10 detailed research steps with strategic multi-tool approach. Use 3-4 tools for cross-validation. 6-8 section outline."
+            PlanComplexity.SIMPLE: "A simple 3-section article.",
+            PlanComplexity.MODERATE: "A standard 4-5 section article covering the main aspects.", 
+            PlanComplexity.COMPREHENSIVE: "A detailed 6-8 section article for a deep dive."
         }
         
         entity_context = ""
@@ -278,56 +274,38 @@ Respond with only one word: "simple", "moderate", or "comprehensive"
                 entity_context = f"\n\nKEY ENTITIES IDENTIFIED:\n{chr(10).join(entity_parts)}\n"
         
         return f"""
-You are an expert research strategist and content planner. Your goal is to design an efficient, logical sequence of research steps with OPTIMIZED SEARCH QUERIES that will yield high-quality, relevant results.
+You are an expert content strategist and editor. Your goal is to design a compelling narrative structure for an article and a research plan to support it.
 
-TOPIC: "{topic}"
-COMPLEXITY LEVEL: {complexity.value} - {complexity_guidance[complexity]}{entity_context}
+**TOPIC:** "{topic}"
+**COMPLEXITY LEVEL:** {complexity.value} - {complexity_guidance[complexity]}{entity_context}
 
-AVAILABLE TOOLS:
+**AVAILABLE TOOLS:**
 {tools_section}
 
-SEARCH QUERY OPTIMIZATION GUIDELINES:
-1. **Tool-Specific Optimization**: Each tool has different search mechanisms and content types
-   - search_general_web: Uses DuckDuckGo + trafilatura scraping - optimize for mainstream content
-   - search_tech_blogs: Searches specific tech sites - use industry terminology 
-   - search_news: Searches major news outlets - use news headline style
-   - search_finance_news: Searches financial sites - use financial terminology
-   - search_youtube_transcripts: Uses Whisper transcription - simple, speaker-focused queries
-   - search_arxiv: Academic search - use precise scientific terminology
-   - get_current_time: No query needed - use for time context
+**YOUR TASK:**
+Create a research plan and a NARRATIVE-DRIVEN article outline. The goal is to create an article that tells a story, not just a list of facts.
 
-2. **Query Length Optimization**: 
-   - Web/News: 3-6 words (broader reach)
-   - Tech Blogs: 3-5 words (focused industry terms)
-   - YouTube: 2-4 words (simple, discoverable)
-   - ArXiv: 4-8 words (precise academic terms)
+**CRITICAL INSTRUCTIONS FOR THE OUTLINE:**
+1.  **Create Story-Driven Headlines:** Do NOT use generic headings like "Introduction," "Analysis," or "Conclusion." Instead, create engaging, descriptive headlines that guide the reader through a story.
+    -   *Bad Example:* "Analysis of Layoffs"
+    -   *Good Example:* "The Official Story: The AI Pivot" or "The Double-Edged Sword of Restructuring"
+2.  **Define a Narrative Arc:** The sections should build on each other logically to tell a complete story. Start with a hook, introduce the core tension or data, analyze the complexity, and conclude with a forward-looking statement.
+3.  **Specify Section Purpose:** For each headline in the outline, add a brief, one-sentence description of that section's purpose and the key question it will answer.
 
-3. **Entity-Based Optimization**: Use extracted entities strategically
-   - Companies: Great for tech blogs, finance news, general web
-   - People: Excellent for YouTube, news
-   - Technologies: Perfect for tech blogs, arXiv
-   - Time indicators: Critical for web and news searches
-
-4. **Avoid Tool-Specific Pitfalls**:
-   - Don't use site: operators in queries (tools handle this internally)
-   - Don't use overly academic terms for YouTube/general web
-   - Don't use casual language for arXiv
-   - Consider that finance tools expect financial terminology
-
-Create a research plan and suggested article outline following this EXACT JSON structure:
+**Create a plan following this EXACT JSON structure:**
 
 {{
-  "reasoning": "Detailed explanation of your research strategy, tool selection rationale, and query optimization approach",
+  "reasoning": "A brief explanation of your research and narrative strategy.",
   "complexity": "{complexity.value}",
   "estimated_time": "Estimated completion time (e.g., '30-45 minutes')",
   "steps": [
     {{
       "step_id": 1,
       "tool": "tool_name_from_list",
-      "query": "Optimized, targeted search query tailored for this specific tool",
+      "query": "Optimized, targeted search query for this specific tool",
       "priority": 1,
       "depends_on": [],
-      "expected_output": "Brief description of what this step should provide",
+      "expected_output": "A brief description of what this step should provide",
       "search_keywords": ["key", "search", "terms"],
       "time_sensitivity": "recent|historical|any",
       "query_alternatives": ["alternative query 1", "alternative query 2"]
@@ -337,34 +315,14 @@ Create a research plan and suggested article outline following this EXACT JSON s
     "Specific criteria that define successful research completion"
   ],
   "fallback_strategies": [
-    "Alternative approaches if primary tools fail, including query reformulation strategies"
+    "Alternative approaches if primary tools fail"
   ],
   "suggested_outline": [
-    "Introduction: [Brief description]",
-    "Key Aspect 1: [Brief description]",
-    "Key Aspect 2: [Brief description]",
-    "Conclusion: [Brief description]"
+    "Engaging Headline 1: [A one-sentence description of the section's purpose and the key question it answers.]",
+    "Engaging Headline 2: [A one-sentence description of the section's purpose and the key question it answers.]",
+    "Engaging Headline 3: [A one-sentence description of the section's purpose and the key question it answers.]"
   ]
 }}
-
-ENHANCED PLANNING GUIDELINES:
-1. Start with broad context queries, then narrow to specifics
-2. Optimize each query for its target tool's search algorithm and content type
-3. Include 2-3 alternative queries for critical steps
-4. Set time_sensitivity based on topic requirements
-5. Extract relevant keywords that could be used for query refinement
-6. Plan for cross-validation across multiple sources
-7. Consider information recency and source authority requirements
-8. Design queries to avoid common search pitfalls (too broad, too narrow, wrong terminology)
-
-QUERY OPTIMIZATION EXAMPLES BY TOOL:
-- search_general_web: "NVIDIA Q4 earnings AI industry" (mainstream, news-focused)
-- search_tech_blogs: "NVIDIA AI chip analysis" (industry terminology)
-- search_news: "NVIDIA earnings report impact" (news headline style)
-- search_finance_news: "NVIDIA earnings revenue guidance" (financial metrics focus)
-- search_youtube_transcripts: "Jensen Huang keynote" (person + event focused)  
-- search_arxiv: "transformer architecture GPU optimization" (technical precision)
-- get_current_time: "" (no query - provides current IST time for context)
 
 Provide ONLY the JSON object. No additional text.
 """
@@ -419,13 +377,39 @@ Provide ONLY the JSON object. No additional text.
             traceback.print_exc()
             return None
 
+    def _clean_json_string(self, json_str: str) -> str:
+        """Clean markdown formatting and other artifacts from JSON string."""
+        # Remove markdown bold formatting
+        json_str = re.sub(r'\*\*([^*]+)\*\*', r'\1', json_str)
+        
+        # Remove standalone asterisks
+        json_str = re.sub(r'\*+', '', json_str)
+        
+        # Remove markdown italic formatting
+        json_str = re.sub(r'\*([^*]+)\*', r'\1', json_str)
+        
+        # Remove any remaining markdown artifacts
+        json_str = re.sub(r'`+', '', json_str)
+        
+        # Clean up extra whitespace
+        json_str = re.sub(r'\s+', ' ', json_str)
+        
+        # Fix common JSON formatting issues
+        json_str = re.sub(r',\s*([}\]])', r'\1', json_str)  # Remove trailing commas
+        json_str = re.sub(r'([}\]])\s*,', r'\1', json_str)  # Remove commas after closing brackets
+        
+        return json_str.strip()
+
     def _extract_json_from_response(self, response: str) -> Optional[Dict]:
         """Extract and parse JSON from model response with multiple fallback strategies."""
+        # First attempt: Direct JSON parsing
         try:
-            return json.loads(response.strip())
+            cleaned_response = self._clean_json_string(response.strip())
+            return json.loads(cleaned_response)
         except json.JSONDecodeError:
             pass
         
+        # Second attempt: Extract from code blocks
         json_patterns = [
             r'```json\s*(\{.*?\})\s*```',
             r'```\s*(\{.*?\})\s*```',
@@ -437,12 +421,33 @@ Provide ONLY the JSON object. No additional text.
             if match:
                 json_str = match.group(1) if match.groups() else match.group(0)
                 try:
-                    # Fix trailing commas
-                    json_str = re.sub(r',\s*([}\]])', r'\1', json_str)
-                    return json.loads(json_str)
-                except json.JSONDecodeError:
+                    cleaned_json = self._clean_json_string(json_str)
+                    return json.loads(cleaned_json)
+                except json.JSONDecodeError as e:
+                    print(f"   🔧 JSON cleaning attempt failed: {e}")
                     continue
         
+        # Third attempt: Try to find and fix common issues
+        try:
+            # Look for JSON-like structure and attempt aggressive cleaning
+            json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', response, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(0)
+                
+                # More aggressive cleaning
+                json_str = self._clean_json_string(json_str)
+                
+                # Try to fix unquoted keys
+                json_str = re.sub(r'(\w+):', r'"\1":', json_str)
+                
+                # Try to fix single quotes
+                json_str = re.sub(r"'([^']*)'", r'"\1"', json_str)
+                
+                return json.loads(json_str)
+        except (json.JSONDecodeError, AttributeError) as e:
+            print(f"   🔧 Aggressive JSON cleaning failed: {e}")
+        
+        print(f"   ❌ All JSON extraction methods failed. Raw response: {response[:200]}...")
         return None
 
     def _refine_queries_post_generation(self, plan: ResearchPlan) -> ResearchPlan:
@@ -519,6 +524,7 @@ Provide ONLY the JSON object. No additional text.
                     
             except Exception as e:
                 print(f"     ❌ Error on attempt {attempt + 1}: {e}")
+                traceback.print_exc()
         
         print("❌ Failed to generate research plan after all attempts.")
         return None, total_tokens
